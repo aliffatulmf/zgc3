@@ -6,61 +6,46 @@ const time = std.time;
 const os = std.os;
 
 const Dir = std.fs.Dir;
-const OpenError = Dir.OpenError;
-const DeleteTreeError = Dir.DeleteTreeError;
-const DeleteFileError = Dir.DeleteFileError;
 const Kind = Dir.Entry.Kind;
 
 pub fn main() !void {
-    const stderr = std.io.getStdErr().writer();
-
-    // create an Allocator
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
     const allocator = arena.allocator();
 
-    // get the target path
-    const target = try getTarget(allocator);
+    const wsp = try workspaceStoragePath(allocator);
 
-    // ======================== BEGIN ========================
-    const t = try std.fs.cwd().openDir(target, .{ .iterate = true });
+    var w = try std.fs.openDirAbsolute(wsp, .{ .iterate = true });
+    defer w.close();
 
-    // set the directory as the current working directory
-    try t.setAsCwd();
+    try w.setAsCwd();
 
-    // create a walker
-    var walker = try t.walk(allocator);
+    execute(allocator, w) catch |err| {
+        std.debug.print("error: {}\n", .{err});
+        std.process.exit(1);
+    };
+}
+
+fn execute(allocator: mem.Allocator, dir: Dir) !void {
+    var walker = try dir.walk(allocator);
     defer walker.deinit();
 
     while (try walker.next()) |entry| {
         if (entry.kind == Kind.directory) {
-            t.deleteTree(entry.path) catch |err| {
-                return switch (err) {
-                    DeleteTreeError.FileBusy => {
-                        try stderr.print("[ERROR]: Directory is busy.\n", .{});
-                    },
-                    else => err,
-                };
-            };
-        } else if (entry.kind == Kind.file) {
-            t.deleteFile(entry.path) catch |err| {
-                return switch (err) {
-                    DeleteFileError.FileBusy => {
-                        try stderr.print("[ERROR]: File is busy.\n", .{});
-                    },
-                    else => err,
-                };
-            };
+            try dir.deleteTree(entry.path);
         }
     }
 }
 
-fn getTarget(allocator: mem.Allocator) ![]const u8 {
-    const roaming: []const u8 = try shell.getAppDataRoaming(allocator);
+fn workspaceStoragePath(allocator: mem.Allocator) ![]const u8 {
+    const app_data = try shell.getAppDataPath(allocator);
 
-    // buffer for storing the target path
-    var buf: [256]u8 = undefined;
-    const target = try std.fmt.bufPrint(&buf, "{s}\\{s}", .{ roaming, "Code\\User\\workspaceStorage" });
+    const target = try std.fs.path.join(allocator, &[_][]const u8{
+        app_data,
+        "Code",
+        "User",
+        "workspaceStorage",
+    });
     return target;
 }
